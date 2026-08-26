@@ -1,0 +1,15 @@
+# 환경변수 / 민감 정보 (절대 커밋 금지)
+.env
+_env
+
+# Jupyter 임시 파일
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# Python 캐시
+__pycache__/
+*.pyc
+
+# 가상환경
+venv/
+.venv/
