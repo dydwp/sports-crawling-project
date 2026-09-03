@@ -4,46 +4,54 @@
 
 ## 프로젝트 개요
 
-- **분석/수집 목적**: 공공서비스예약 사이트의 체육시설 정보를 자동으로 수집하여 데이터베이스화
-- **데이터 출처**: [서울열린데이터광장](https://data.seoul.go.kr) - 서울시 체육시설 공공서비스예약 정보
-- **수집 방식**: API 대신 Selenium 기반 동적 크롤링 (URL 방식)
+- **수집 목적**: 서울시 각 자치구의 체육시설 공공서비스예약 정보를 자동으로 수집하여 데이터베이스화
+- **데이터 출처**: [서울열린데이터광장](https://data.seoul.go.kr) - "체육시설" 키워드로 검색되는 자치구별 데이터셋
+- **수집 방식**: API 대신 Selenium 기반 동적 크롤링
+- **목표 수집량**: 최소 100건 이상
 
 ## 수집 항목
 
-- 서비스구분
-- 서비스ID
-- 대분류명
-- 소분류명
-- 서비스상태
-- 서비스명
+| 컬럼 | 설명 |
+|---|---|
+| 서비스구분 | 자체/위탁 등 서비스 구분 |
+| 서비스ID | 서비스 고유 ID (PK) |
+| 대분류명 | 대분류명 (체육시설) |
+| 소분류명 | 시설 종류 (축구장, 농구장 등) |
+| 서비스상태 | 접수중 / 접수종료 / 예약마감 등 |
+| 서비스명 | 서비스(시설) 이름 |
 
 ## 파이프라인 구조
 
 ```
-01. Selenium 크롤링 (01_environment_selenium_crawling_clean.ipynb)
-        ↓ CSV 중간 저장 (sports_crawling_raw.csv)
-02. Pandas 전처리 (02_preprocessing.ipynb)
-        ↓ 결측치/중복 제거, 문자열 정리
-        ↓ CSV 저장 (전처리 완료 데이터)
-03. MySQL 적재 (03_database.ipynb)
-        ↓ DB/테이블 생성 후 저장 및 검증
+main.py
+  └─ crawl_data()            # Selenium: 데이터셋 검색 → 자치구별 순회 크롤링
+  └─ validate_data()         # 품질 검증 (결측/중복/빈 문자열)
+  └─ preprocess_data()       # Pandas 전처리 (헤더 제거, strip, 중복 제거)
+  └─ save_csv()              # data/raw, data/processed에 날짜별 CSV 저장
+  └─ load_database_config()  # .env에서 MySQL 접속 정보 로드
+  └─ create_database_and_table()
+  └─ save_to_mysql()         # 기존 데이터 삭제 후 이번 실행 결과만 저장
 ```
 
-`sports_crawling.py`는 위 01~03단계 전체를 하나의 스크립트로 통합해 자동 실행할 수 있도록 만든 버전입니다.
-
-## 분석 환경
+## 분석/개발 환경
 
 - Language: Python 3
-- Library: Selenium, Pandas, mysql-connector-python, python-dotenv
+- Library: Selenium, Pandas, mysql-connector-python, python-dotenv, pytest
 - Database: MySQL
-- Tool: Jupyter Lab, Chrome WebDriver
+- Tool: Jupyter Lab (탐색/검증용), Chrome WebDriver
 
 ## 실행 방법
 
 ### 1. 패키지 설치
 
 ```bash
-pip install selenium pandas mysql-connector-python python-dotenv
+pip install -r requirements.txt
+```
+
+테스트/린트까지 실행하려면 개발용 의존성(pytest, ruff)을 추가로 설치합니다. `requirements-dev.txt`가 `requirements.txt`를 상속하므로 이 한 줄이면 됩니다.
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 ### 2. 환경변수 설정
@@ -57,23 +65,52 @@ DB_PASSWORD=your_password
 DB_NAME=sports_crawling
 ```
 
-### 3. 실행
-
-노트북을 순서대로(01 → 02 → 03) 실행하거나, 통합 스크립트를 실행합니다.
+### 3. 파이프라인 실행
 
 ```bash
-python sports_crawling.py
+python main.py
+```
+
+### 4. 테스트 실행
+
+Selenium/DB 없이 동작하는 순수 로직(전처리, 품질 검증, 설정)에 대한 단위 테스트입니다.
+
+```bash
+pytest tests/ -v
 ```
 
 ## 폴더 구조
 
 ```
-├── 01_environment_selenium_crawling_clean.ipynb   # 1단계: Selenium 크롤링
-├── 02_preprocessing.ipynb                          # 2단계: 데이터 전처리
-├── 03_database.ipynb                               # 3단계: MySQL 적재
-├── sports_crawling.py                              # 전체 파이프라인 통합 스크립트
-├── sports_crawling_raw.csv                         # 크롤링 원본 데이터
-├── sports_crawling_요구사항_정의서.docx              # 요구사항 정의서
-├── .env                                            # DB 접속 정보 (Git 제외 대상)
-└── README.md
+sports-crawling-project/
+│
+├── main.py                      # 파이프라인 실행 진입점
+├── requirements.txt
+├── .env                         # DB 접속 정보 (Git 제외 대상)
+│
+├── notebooks/                   # 탐색/검증용 Jupyter 노트북
+│   ├── 01_environment_selenium_crawling_clean.ipynb
+│   ├── 02_preprocessing.ipynb
+│   └── 03_database.ipynb
+│
+├── src/
+│   └── sports_pipeline/         # 파이프라인 모듈
+│       ├── config.py            # 경로/URL/컬럼 등 설정값
+│       ├── crawler.py           # Selenium 크롤링
+│       ├── preprocess.py        # Pandas 전처리
+│       ├── quality.py           # 데이터 품질 검증
+│       ├── csv_writer.py        # CSV 저장
+│       └── database.py          # MySQL 저장
+│
+├── tests/                       # pytest 단위 테스트
+│   ├── conftest.py
+│   ├── test_config.py
+│   ├── test_preprocess.py
+│   └── test_quality.py
+│
+├── data/
+│   ├── raw/                     # 크롤링 원본 CSV (날짜별)
+│   └── processed/               # 전처리 완료 CSV (날짜별)
+│
+└── .github/workflows/ci.yml     # GitHub Actions CI
 ```
