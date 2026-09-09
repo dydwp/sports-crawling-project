@@ -1,3 +1,4 @@
+```yaml
 name: CD
 
 
@@ -83,7 +84,21 @@ jobs:
 
 
       ## -------------------------------------------------------
-      ## 4. GitHub OIDC → AWS IAM Role 인증
+      ## 4. GitHub Context 확인
+      ## OIDC 인증 문제 확인을 위한 디버깅
+      ## -------------------------------------------------------
+
+      - name: Debug GitHub Context
+        run: |
+          echo "Repository: ${{ github.repository }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Head branch: ${{ github.event.workflow_run.head_branch }}"
+          echo "Head SHA: ${{ github.event.workflow_run.head_sha }}"
+
+
+      ## -------------------------------------------------------
+      ## 5. GitHub OIDC → AWS IAM Role 인증
       ## -------------------------------------------------------
 
       - name: Configure AWS credentials
@@ -96,7 +111,7 @@ jobs:
 
 
       ## -------------------------------------------------------
-      ## 5. AWS 인증 확인
+      ## 6. AWS 인증 확인
       ## -------------------------------------------------------
 
       - name: Verify AWS identity
@@ -105,7 +120,7 @@ jobs:
 
 
       ## -------------------------------------------------------
-      ## 6. SAM Template 검증
+      ## 7. SAM Template 검증
       ## -------------------------------------------------------
 
       - name: Validate SAM template
@@ -114,7 +129,7 @@ jobs:
 
 
       ## -------------------------------------------------------
-      ## 7. SAM Build (컨테이너 이미지 빌드)
+      ## 8. SAM Build
       ## Selenium/Chrome이 포함된 Dockerfile을 빌드하므로
       ## --use-container 옵션 필요
       ## -------------------------------------------------------
@@ -125,7 +140,7 @@ jobs:
 
 
       ## -------------------------------------------------------
-      ## 8. AWS SAM Deploy
+      ## 9. AWS SAM Deploy
       ## ECR 이미지 Push + CloudFormation Stack 업데이트
       ## -------------------------------------------------------
 
@@ -144,3 +159,4 @@ jobs:
               DbName="${{ vars.DB_NAME }}" \
               ScheduleEnabled="${{ vars.SCHEDULE_ENABLED }}" \
               ScheduleExpression="${{ vars.SCHEDULE_EXPRESSION }}"
+```
