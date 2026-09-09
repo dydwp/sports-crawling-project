@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
 
 # ============================================================
 # 프로젝트 경로
@@ -9,7 +8,8 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-DATA_DIR = PROJECT_ROOT / "data"
+DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = Path(os.getenv("DATA_DIR", str(DEFAULT_DATA_DIR)))
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 
@@ -57,41 +57,4 @@ COLUMNS = [
 
 TABLE_NAME = "sports_facility"
 
-
-def load_database_config():
-    """
-    .env에서 MySQL 접속 정보를 읽는다.
-
-    .env 예시:
-
-    DB_HOST=호스트
-    DB_USER=사용자
-    DB_PASSWORD=비밀번호
-    DB_NAME=sports_crawling
-    """
-
-    # 프로젝트 루트의 .env를 명시적으로 읽는다.
-    env_path = PROJECT_ROOT / ".env"
-
-    load_dotenv(dotenv_path=env_path)
-
-    config = {
-        "host": os.getenv("DB_HOST"),
-        "user": os.getenv("DB_USER"),
-        "password": os.getenv("DB_PASSWORD"),
-        "database": os.getenv("DB_NAME"),
-    }
-
-    missing = [
-        key
-        for key, value in config.items()
-        if value is None or value == ""
-    ]
-
-    if missing:
-        raise RuntimeError(
-            ".env에 다음 환경변수가 없습니다: "
-            + ", ".join(missing)
-        )
-
-    return config
+ENV_FILE = PROJECT_ROOT / ".env"

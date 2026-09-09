@@ -1,4 +1,5 @@
 import time
+import os
 
 import pandas as pd
 from selenium import webdriver
@@ -6,6 +7,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.chrome.service import Service
 
 from .config import (
     COLUMNS,
@@ -25,13 +27,29 @@ from .config import (
 def create_driver():
     options = Options()
 
-    options.add_argument("--start-maximized")
+    chrome_bin = os.getenv("CHROME_BIN")
+    chromedriver_path = os.getenv("CHROMEDRIVER_PATH")
+
+    if chrome_bin:
+        options.binary_location = chrome_bin
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--single-process")
+        options.add_argument("--window-size=1920,1080")
+    else:
+        options.add_argument("--start-maximized")
 
     # 불필요한 로그 최소화
     options.add_experimental_option(
         "excludeSwitches",
         ["enable-logging"]
     )
+
+    if chromedriver_path:
+        service = Service(executable_path=chromedriver_path)
+        return webdriver.Chrome(service=service, options=options)
 
     return webdriver.Chrome(options=options)
 

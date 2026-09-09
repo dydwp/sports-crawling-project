@@ -1,6 +1,3 @@
-from .config import (
-    load_database_config,
-)
 from .crawler import (
     crawl_data,
 )
@@ -9,6 +6,7 @@ from .csv_writer import (
 )
 from .database import (
     create_database_and_table,
+    load_database_config,
     save_to_mysql,
 )
 from .preprocess import (

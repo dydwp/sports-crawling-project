@@ -1,0 +1,626 @@
+## CloudFormation 템플릿 버전 정의
+AWSTemplateFormatVersion: '2010-09-09'
+
+## SAM 구문을 표준 AWS CloudFormation 리소스로 변환하는 매크로 선언
+Transform: AWS::Serverless-2016-10-31
+
+## 템플릿 전체에 대한 설명
+Description: >
+  서울시 체육시설 데이터 크롤링 파이프라인을 위한
+  AWS SAM 템플릿
+
+
+## ===========================================================
+## Parameters
+## 계정 및 환경마다 달라지는 AWS 리소스 값을 외부에서 전달
+## ===========================================================
+
+Parameters:
+
+  ## ---------------------------------------------------------
+  ## VPC 신규 생성 관련 파라미터
+  ## (학원 실습 계정 초기화로 01-data-collection-pipeline이 쓰던
+  ##  VPC가 사라져서, 재사용 대신 이 템플릿 안에서 직접 생성함)
+  ## ---------------------------------------------------------
+
+  ## 신규 VPC의 CIDR 대역
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: 신규 생성할 VPC의 CIDR 블록
+
+  ## NAT Instance가 위치할 Public Subnet CIDR
+  PublicSubnetCidr:
+    Type: String
+    Default: 10.0.0.0/24
+    Description: NAT Instance용 Public Subnet CIDR
+
+  ## Lambda + RDS가 위치할 Private Subnet CIDR (AZ #1)
+  PrivateSubnetOneCidr:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: Private Subnet CIDR (AZ #1) - Lambda/RDS
+
+  ## Lambda + RDS가 위치할 Private Subnet CIDR (AZ #2)
+  ## RDS Subnet Group 요구사항(서로 다른 AZ 2개 이상)을 맞추기 위한 두 번째 서브넷
+  PrivateSubnetTwoCidr:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: Private Subnet CIDR (AZ #2) - RDS Subnet Group용
+
+  ## NAT Instance 인스턴스 타입
+  ## NAT Gateway(시간당 과금, 월 $30+) 대신 저렴한 EC2 NAT Instance 사용
+  ## t3.nano는 크롤링 트래픽 수준에서 충분하고 과금이 훨씬 저렴함(월 $3~4 수준)
+  NatInstanceType:
+    Type: String
+    Default: t3.nano
+    Description: NAT Instance EC2 타입 (비용 절감을 위해 NAT Gateway 대신 사용)
+
+  ## RDS 인스턴스 클래스
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    Description: RDS 인스턴스 클래스
+
+  ## MySQL 데이터베이스 이름
+  DbName:
+    Type: String
+    Default: sports_crawling
+    Description: MySQL 데이터베이스 이름
+
+  ## EventBridge Scheduler 활성화 여부
+  ScheduleEnabled:
+    Type: String
+    Default: 'true'
+
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+    Description: Enable or disable EventBridge Scheduler
+
+  ## EventBridge Scheduler 실행 주기
+  ## 기본값: 매일 UTC 19시 = KST 04시
+  ScheduleExpression:
+    Type: String
+    Default: 'cron(0 19 * * ? *)'
+    Description: EventBridge Scheduler cron expression
+
+
+## ===========================================================
+## Conditions
+## 조건에 따라 AWS 리소스 속성을 동적으로 결정
+## ===========================================================
+
+Conditions:
+
+  ## ScheduleEnabled 값이 true인지 확인
+  IsScheduleEnabled: !Equals
+    - !Ref ScheduleEnabled
+    - 'true'
+
+
+## ===========================================================
+## Resources
+## 배포할 Lambda, RDS, 네트워킹, Scheduler 등의 AWS 리소스 정의
+## ===========================================================
+
+Resources:
+
+
+  ## =========================================================
+  ## VPC
+  ## 01-data-collection-pipeline이 쓰던 VPC가 계정 초기화로 사라져서
+  ## 재사용 대신 이 템플릿 안에서 신규로 생성
+  ## =========================================================
+
+  Vpc:
+    Type: AWS::EC2::VPC
+
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+      Tags:
+        - Key: Name
+          Value: sports-crawling-vpc
+
+
+  ## =========================================================
+  ## Internet Gateway
+  ## Public Subnet(NAT Instance)이 인터넷에 나가기 위한 통로
+  ## =========================================================
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+
+  ## =========================================================
+  ## Public Subnet
+  ## NAT Instance 전용. Internet Gateway로 직접 라우팅됨
+  ## =========================================================
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PublicSubnetCidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+      Tags:
+        - Key: Name
+          Value: sports-crawling-public-subnet
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+
+    Properties:
+      VpcId: !Ref Vpc
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+
+    ## Internet Gateway가 VPC에 연결된 후에 라우팅을 생성해야 함
+    DependsOn: VpcGatewayAttachment
+
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+
+  ## =========================================================
+  ## Private Subnet (2개, 서로 다른 AZ)
+  ## Lambda + RDS가 위치. 인터넷 접근은 NAT Instance 경유로만 가능
+  ## (RDS Subnet Group 요구사항: 서로 다른 AZ 2개 이상 필요)
+  ## =========================================================
+
+  PrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnetOneCidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+
+      Tags:
+        - Key: Name
+          Value: sports-crawling-private-subnet-1
+
+  PrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnetTwoCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+
+      Tags:
+        - Key: Name
+          Value: sports-crawling-private-subnet-2
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+
+    Properties:
+      VpcId: !Ref Vpc
+
+  ## NAT Instance가 실제로 떠 있어야 라우팅이 유효함
+  ## (InstanceId의 !Ref가 이미 NatInstance 생성 순서를 보장하므로
+  ## 별도 DependsOn은 불필요)
+  PrivateRoute:
+    Type: AWS::EC2::Route
+
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NatInstance
+
+  PrivateSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+
+    Properties:
+      SubnetId: !Ref PrivateSubnetOne
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+
+    Properties:
+      SubnetId: !Ref PrivateSubnetTwo
+      RouteTableId: !Ref PrivateRouteTable
+
+
+  ## =========================================================
+  ## NAT Instance용 Security Group
+  ## Private Subnet(Lambda/RDS)에서 오는 트래픽을 받아 인터넷으로 포워딩
+  ## =========================================================
+
+  NatInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+
+    Properties:
+      GroupDescription: sports-crawling NAT Instance Security Group
+      VpcId: !Ref Vpc
+
+      ## VPC 내부(Private Subnet 포함)에서 오는 트래픽 전체 허용
+      SecurityGroupIngress:
+        - IpProtocol: '-1'
+          CidrIp: !Ref VpcCidr
+
+
+  ## =========================================================
+  ## NAT Instance (EC2)
+  ## NAT Gateway 대신 사용하는 저비용 NAT 역할 인스턴스
+  ## Private Subnet(Lambda)이 크롤링 대상 사이트로 나갈 때 이 인스턴스를 경유
+  ## =========================================================
+
+  NatInstance:
+    Type: AWS::EC2::Instance
+
+    Properties:
+      InstanceType: !Ref NatInstanceType
+
+      ## 리전별 최신 Amazon Linux 2023 AMI를 SSM Parameter로 자동 조회
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref NatInstanceSecurityGroup
+
+      ## NAT 역할을 하려면 자신에게 오지 않는 트래픽도 전달해야 하므로
+      ## 출발지/목적지 검사를 반드시 꺼야 함
+      SourceDestCheck: false
+
+      ## 부팅 시 IP Forwarding 활성화 + iptables MASQUERADE 설정
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sysctl -w net.ipv4.ip_forward=1
+          echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
+          iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+          iptables-save > /etc/sysconfig/iptables
+
+      Tags:
+        - Key: Name
+          Value: sports-crawling-nat-instance
+
+  ## NAT Instance에 고정 Public IP 부여
+  NatInstanceEip:
+    Type: AWS::EC2::EIP
+
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref NatInstance
+
+
+  ## =========================================================
+  ## Lambda용 Security Group
+  ## 아웃바운드 기본 전체 허용
+  ## (크롤링 대상 사이트 + RDS + Secrets Manager 모두 나가야 함)
+  ## =========================================================
+
+  PipelineSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+
+    Properties:
+      GroupDescription: sports-crawling-pipeline Lambda Security Group
+      VpcId: !Ref Vpc
+
+
+  ## =========================================================
+  ## RDS용 Security Group
+  ## Lambda Security Group에서 오는 3306 포트만 허용
+  ## =========================================================
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+
+    Properties:
+      GroupDescription: sports-crawling RDS Security Group
+      VpcId: !Ref Vpc
+
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref PipelineSecurityGroup
+
+
+  ## =========================================================
+  ## RDS DB Subnet Group
+  ## =========================================================
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+
+    Properties:
+      DBSubnetGroupDescription: sports-crawling RDS Subnet Group
+      SubnetIds:
+        - !Ref PrivateSubnetOne
+        - !Ref PrivateSubnetTwo
+
+
+  ## =========================================================
+  ## Amazon RDS MySQL
+  ## 이 프로젝트 전용으로 신규 생성
+  ## =========================================================
+
+  SportsDatabase:
+    Type: AWS::RDS::DBInstance
+
+    ## 스택 삭제 시 실수로 데이터가 완전히 사라지는 것을 방지
+    DeletionPolicy: Snapshot
+
+    ## 스택 업데이트로 리소스가 교체(재생성)되는 경우에도
+    ## 동일하게 스냅샷을 남기고 삭제하도록 보호 (cfn-lint W3011)
+    UpdateReplacePolicy: Snapshot
+
+    Properties:
+      Engine: mysql
+
+      ## '8.0'처럼 마이너 버전 없이는 지정 불가 (cfn-lint E3691)
+      ## 이 리전에서 지원하는 8.0 계열 중 최신 버전 사용
+      EngineVersion: '8.0.43'
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: '20'
+      StorageEncrypted: true
+      DBName: !Ref DbName
+      MasterUsername: admin
+
+      ## RDS가 비밀번호를 직접 생성하여 Secrets Manager에 저장/관리
+      ## database.py의 Secrets Manager 분기가 이 Secret을 읽음
+      ManageMasterUserPassword: true
+
+      DBSubnetGroupName: !Ref DbSubnetGroup
+
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+
+
+  ## =========================================================
+  ## Pipeline Lambda (컨테이너 이미지)
+  ## Selenium 크롤링 → 품질 검증 → 전처리 → CSV 저장 → RDS 적재
+  ## 를 하나의 Lambda에서 전부 수행
+  ## =========================================================
+
+  PipelineFunction:
+    Type: AWS::Serverless::Function
+
+    ## 컨테이너 이미지 빌드에 사용할 Dockerfile 지정
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+
+    Properties:
+      ## Lambda 물리적 이름
+      FunctionName: sports-crawling-pipeline
+
+      ## Zip이 아닌 컨테이너 이미지로 배포
+      PackageType: Image
+
+      ## Chrome 구동을 위한 넉넉한 메모리
+      MemorySize: 2048
+
+      ## 최대 실행 시간 (Selenium 크롤링은 페이지 이동 대기가 많음)
+      Timeout: 600
+
+      ## Chrome 캐시/프로필 저장을 위한 임시 스토리지 확장
+      EphemeralStorage:
+        Size: 1024
+
+      ## Lambda 환경변수
+      Environment:
+        Variables:
+
+          ## Lambda 임시 파일 저장 경로 (config.py의 DATA_DIR 오버라이드)
+          DATA_DIR: /tmp/data
+
+          ## Amazon RDS MySQL 접속 정보
+          DB_HOST: !GetAtt SportsDatabase.Endpoint.Address
+          DB_PORT: !GetAtt SportsDatabase.Endpoint.Port
+          DB_NAME: !Ref DbName
+
+          ## RDS가 관리하는 Secrets Manager Secret ARN
+          DB_SECRET_ARN: !GetAtt SportsDatabase.MasterUserSecret.SecretArn
+
+      ## Pipeline Lambda를 RDS와 동일 VPC에 연결
+      ## (크롤링 대상 인터넷 + RDS 양쪽 다 접근해야 하므로
+      ## PrivateRoute를 통해 NAT Instance를 경유하는 Private Subnet 사용)
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref PipelineSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetOne
+          - !Ref PrivateSubnetTwo
+
+      ## Pipeline Lambda IAM 권한
+      Policies:
+
+        ## VPC 안에서 Lambda ENI를 생성/관리하기 위한 AWS 관리형 정책
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+        ## RDS 관리형 Secret 조회를 위한 Secrets Manager 권한
+        - Statement:
+
+            - Sid: ReadDatabaseSecret
+              Effect: Allow
+
+              Action:
+                - secretsmanager:GetSecretValue
+
+              Resource:
+                - !GetAtt SportsDatabase.MasterUserSecret.SecretArn
+
+
+  ## =========================================================
+  ## EventBridge Scheduler IAM Role
+  ## Scheduler → Pipeline Lambda 호출 권한
+  ## =========================================================
+
+  PipelineSchedulerRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+
+      ## IAM Role 신뢰 정책
+      ## EventBridge Scheduler가 이 Role을 사용할 수 있도록 허용
+      AssumeRolePolicyDocument:
+
+        Version: '2012-10-17'
+
+        Statement:
+
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+      ## Scheduler가 Pipeline Lambda를 호출하기 위한 IAM 정책
+      Policies:
+
+        - PolicyName: InvokePipelineFunction
+
+          PolicyDocument:
+
+            Version: '2012-10-17'
+
+            Statement:
+
+              - Effect: Allow
+
+                Action:
+                  - lambda:InvokeFunction
+
+                Resource:
+                  - !GetAtt PipelineFunction.Arn
+
+
+  ## =========================================================
+  ## EventBridge Scheduler
+  ## 지정한 시간에 Pipeline Lambda 자동 실행
+  ## =========================================================
+
+  PipelineSchedule:
+    Type: AWS::Scheduler::Schedule
+
+    Properties:
+
+      ## Scheduler 이름
+      Name: sports-crawling-schedule
+
+      ## Scheduler 설명
+      Description: >
+        서울시 체육시설 크롤링 Lambda를
+        정해진 시간에 자동 실행하는 Scheduler
+
+      ## Scheduler 활성화 상태
+      ## ScheduleEnabled=true  → ENABLED
+      ## ScheduleEnabled=false → DISABLED
+      State: !If
+        - IsScheduleEnabled
+        - ENABLED
+        - DISABLED
+
+      ## 실행 Cron 표현식
+      ScheduleExpression: !Ref ScheduleExpression
+
+      ## Cron 표현식이 해석될 시간대
+      ScheduleExpressionTimezone: Asia/Seoul
+
+      ## Flexible Time Window 사용하지 않음
+      ## 지정된 스케줄 시간에 실행
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+
+      ## Scheduler가 실행할 대상
+      Target:
+
+        ## 실행 대상 Pipeline Lambda ARN
+        Arn: !GetAtt PipelineFunction.Arn
+
+        ## Scheduler가 사용할 IAM Role ARN
+        RoleArn: !GetAtt PipelineSchedulerRole.Arn
+
+
+## ===========================================================
+## Outputs
+## Stack 배포 후 확인할 주요 리소스 정보
+## ===========================================================
+
+Outputs:
+
+
+  ## =========================================================
+  ## Pipeline Lambda
+  ## =========================================================
+
+  ## Pipeline Lambda 물리적 함수명
+  PipelineFunctionName:
+    Description: Sports Crawling Pipeline Lambda Function Name
+    Value: !Ref PipelineFunction
+
+  ## Pipeline Lambda ARN
+  PipelineFunctionArn:
+    Description: Sports Crawling Pipeline Lambda Function ARN
+    Value: !GetAtt PipelineFunction.Arn
+
+
+  ## =========================================================
+  ## Amazon RDS
+  ## =========================================================
+
+  ## RDS 엔드포인트 주소
+  DatabaseEndpoint:
+    Description: Amazon RDS MySQL Endpoint Address
+    Value: !GetAtt SportsDatabase.Endpoint.Address
+
+  ## RDS 관리형 Secrets Manager Secret ARN
+  DatabaseSecretArn:
+    Description: Amazon RDS Managed Secrets Manager Secret ARN
+    Value: !GetAtt SportsDatabase.MasterUserSecret.SecretArn
+
+
+  ## =========================================================
+  ## EventBridge Scheduler
+  ## =========================================================
+
+  ## EventBridge Scheduler 이름
+  PipelineScheduleName:
+    Description: Sports Crawling EventBridge Scheduler Name
+    Value: !Ref PipelineSchedule
+
+  ## EventBridge Scheduler ARN
+  PipelineScheduleArn:
+    Description: Sports Crawling EventBridge Scheduler ARN
+    Value: !GetAtt PipelineSchedule.Arn
+
+  ## Scheduler가 사용하는 IAM Role ARN
+  PipelineSchedulerRoleArn:
+    Description: EventBridge Scheduler IAM Role ARN
+    Value: !GetAtt PipelineSchedulerRole.Arn

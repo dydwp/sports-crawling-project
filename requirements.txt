@@ -2,3 +2,4 @@ pandas
 selenium
 mysql-connector-python
 python-dotenv
+boto3

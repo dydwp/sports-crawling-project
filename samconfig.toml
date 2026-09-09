@@ -1,0 +1,37 @@
+version = 0.1
+
+# ============================================================
+# sam build 설정
+# Dockerfile 안에서 Chrome/Chromedriver를 다운로드하는 등
+# 로컬 환경에 의존하지 않는 격리된 빌드가 필요하므로
+# 컨테이너 안에서 빌드하도록 고정한다.
+# (CI의 deploy.yml도 동일하게 --use-container를 사용한다)
+# ============================================================
+
+[default.build.parameters]
+use_container = true
+
+# ============================================================
+# sam deploy 설정
+# ============================================================
+
+[default.deploy.parameters]
+stack_name = "sports-crawling-pipeline"
+
+# S3 버킷을 직접 만들지 않고 SAM이 관리하는 버킷을 자동 사용
+resolve_s3 = true
+s3_prefix = "sports-crawling-pipeline"
+
+# 참고 프로젝트(01-data-collection-pipeline)와의 핵심 차이점:
+# 이 프로젝트는 PackageType: Image(컨테이너 이미지) Lambda이므로
+# 참고 프로젝트의 `image_repositories = []` 대신
+# ECR 리포지토리를 SAM이 자동으로 생성/관리하도록
+# resolve_image_repos를 사용한다.
+resolve_image_repos = true
+
+region = "ap-northeast-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+
+[default.global.parameters]
+region = "ap-northeast-2"
