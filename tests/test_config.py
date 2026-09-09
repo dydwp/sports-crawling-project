@@ -4,8 +4,9 @@ from src.sports_pipeline.config import (
     COLUMNS,
     DATASET_KEYWORD,
     MIN_DATA_COUNT,
-    load_database_config,
 )
+
+from src.sports_pipeline.database import load_database_config
 
 
 def test_columns_definition():

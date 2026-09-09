@@ -53,7 +53,7 @@ def _load_secret_value(secret_arn, secrets_client=None):
         ) from error
 
     if not isinstance(secret, dict):
-        raise ValueError("Secrets Manager의 Secret 값은 JSON 객체여야 합니다.")
+        raise TypeError("Secrets Manager의 Secret 값은 JSON 객체여야 합니다.")
 
     return secret
 
